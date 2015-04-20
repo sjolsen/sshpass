@@ -2,4 +2,4 @@ HEADERS=$(wildcard *.h)
 SOURCES=$(wildcard *.c)
 
 sshpass: $(HEADERS) $(SOURCES)
-	c99 -D_POSIX_SOURCE -o $@ $^
+	c99 -o $@ $^ -D_POSIX_SOURCE -lssh2
