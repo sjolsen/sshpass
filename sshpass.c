@@ -1,6 +1,7 @@
-#define _POSIX_SOURCE
 #include "status.h"
 #include "tcp.h"
+#include "lines.h"
+#include <unistd.h>
 
 status_t get_args (const char* (*address),
                    const char* (*username),
@@ -8,7 +9,7 @@ status_t get_args (const char* (*address),
                    int argc, const char* const* argv)
 {
 	if (argc != 4)
-		failure (NULL);
+		return failure (NULL);
 
 	(*address) = argv [1];
 	(*username) = argv [2];
@@ -31,6 +32,16 @@ int main (int argc, const char* const* argv)
 	FILE* dict_file = fopen (dict_filename, "r");
 	raw_check (dict_file != NULL, "Could not open %s for reading", dict_filename);
 
+	line_t line;
+	check (make_line (&line), "General failure");
+	while (1) {
+		check (get_line (&line, dict_file), "Failed to read password");
+		if (feof (dict_file))
+			break;
+		printf ("%s\n", line.ntbs);
+	}
+
 	close (ssh_socket);
+	fclose (dict_file);
 	return EXIT_SUCCESS;
 }

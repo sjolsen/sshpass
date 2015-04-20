@@ -5,7 +5,6 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <stdbool.h>
 
 typedef enum status_type {
@@ -28,18 +27,18 @@ status_t success (void)
 }
 
 static inline
-status_t efailure (int err)
-{
-	return failure (strerror (err));
-}
-
-static inline
 status_t failure (const char* reason)
 {
 	return (status_t) {
 		.type   = STATUS_FAILURE,
 		.reason = reason
 	};
+}
+
+static inline
+status_t efailure (int err)
+{
+	return failure (strerror (err));
 }
 
 static inline

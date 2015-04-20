@@ -1,4 +1,3 @@
-#define _POSIX_SOURCE
 #include "tcp.h"
 #include <stdlib.h>
 #include <netdb.h>

@@ -1,4 +1,6 @@
 #include "status.h"
+#include <stdarg.h>
+#include <stdio.h>
 
 void check (status_t status, const char* fmt, ...)
 {
