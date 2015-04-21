@@ -22,6 +22,12 @@ status_t resize_line (line_t (*line), size_t size)
 	return success ();
 }
 
+void free_line (line_t (*line))
+{
+	if (line->ntbs != NULL)
+		free (line->ntbs);
+}
+
 status_t empty_line (line_t (*line))
 {
 	status_t status = resize_line (line, 1);

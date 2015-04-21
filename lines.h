@@ -12,5 +12,6 @@ typedef struct line_t {
 
 status_t make_line (line_t (*line));
 status_t get_line (line_t (*line), FILE* file);
+void free_line (line_t (*line));
 
 #endif
