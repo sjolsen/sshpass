@@ -68,6 +68,7 @@ status_t bruteforce_core (line_t (*the_password), void* _data)
 
 		// Open a connection
 		int ssh_socket;
+	retry:
 		status = connect_tcp (&ssh_socket, data->address, "22");
 		if (failed (status))
 			goto end;
@@ -106,7 +107,8 @@ status_t bruteforce_core (line_t (*the_password), void* _data)
 		pthread_cleanup_pop (1);
 	end:
 		if (failed (status))
-			return status;
+			/* return status; */
+			goto retry;
 	}
 }
 
