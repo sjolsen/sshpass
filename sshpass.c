@@ -106,9 +106,11 @@ status_t bruteforce_core (line_t (*the_password), void* _data)
 	close:
 		pthread_cleanup_pop (1);
 	end:
-		if (failed (status))
+		if (failed (status)) {
 			/* return status; */
+			fprintf (stderr, "Warning: %s\n", status.reason);
 			goto retry;
+		}
 	}
 }
 
@@ -255,9 +257,9 @@ int main (int argc, const char* const* argv)
 	const char* address = NULL;
 	const char* username = NULL;
 	const char* dict_filename = NULL;
-	int nthreads = 1;
+	int nthreads = 9;
 	check (get_args (&address, &username, &dict_filename, &nthreads, argc, argv),
-	       "Usage: sshpass address username dict_file [threads=1]");
+	       "Usage: sshpass address username dict_file [threads=9]");
 
 	FILE* dict_file = fopen (dict_filename, "r");
 	raw_check (dict_file != NULL, "Could not open %s for reading", dict_filename);
